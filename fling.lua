@@ -1,5 +1,5 @@
 -- ╔══════════════════════════════════════════════════════════════╗
--- ║           FLING SCRIPT v3.0 — by m1koli4ik                  ║
+-- ║           FLING SCRIPT v3.1 — by m1koli4ik                  ║
 -- ║      Premium GUI · Anti-Fling Bypass · Anti-Fling Shield     ║
 -- ╚══════════════════════════════════════════════════════════════╝
 
@@ -14,7 +14,7 @@ local LocalPlayer = Players.LocalPlayer
 -- ════════════════════════════════════════════════
 --  STATE
 -- ════════════════════════════════════════════════
-local selectedPlayers  = {}   -- { [Player] = true }
+local selectedPlayers  = {}
 local flingAllActive   = false
 local antiFlingEnabled = false
 local antiFlingConn    = nil
@@ -46,12 +46,7 @@ local function restorePosition()
 end
 
 -- ════════════════════════════════════════════════
---  ANTI-FLING BYPASS CORE
---  Works by: teleporting on top of target, forcing
---  PlatformStand, injecting high-force BodyVelocity,
---  AND setting raw AssemblyLinearVelocity each frame.
---  This bypasses most anti-fling scripts which only
---  destroy BodyMovers or reset CFrame on .Changed.
+--  FLING CORE  (Anti-Fling Bypass)
 -- ════════════════════════════════════════════════
 local function flingPlayer(target)
     if not target or target == LocalPlayer then return end
@@ -68,40 +63,39 @@ local function flingPlayer(target)
     myHRP.CFrame = targetHRP.CFrame * CFrame.new(0, 2.5, 0)
     task.wait(0.02)
 
-    -- Step 2: Force target into Physics state (bypasses most locks)
+    -- Step 2: Force Physics state (bypasses most anti-fling locks)
     pcall(function() targetHum:ChangeState(Enum.HumanoidStateType.Physics) end)
     pcall(function() targetHum.PlatformStand = true end)
 
-    -- Step 3: Remove any existing BodyMovers on target
+    -- Step 3: Destroy any existing body movers on target
     for _, v in ipairs(targetHRP:GetChildren()) do
-        if v:IsA("BodyVelocity") or v:IsA("BodyForce") or
-           v:IsA("BodyAngularVelocity") or v:IsA("VectorForce") then
+        if v:IsA("BodyVelocity") or v:IsA("BodyForce")
+        or v:IsA("BodyAngularVelocity") or v:IsA("VectorForce") then
             v:Destroy()
         end
     end
 
-    -- Step 4: Inject high-force BodyVelocity with extreme random direction
-    local direction = Vector3.new(
-        math.random(-1, 1) ~= 0 and math.random(-1, 1) or 1,
-        1,
-        math.random(-1, 1) ~= 0 and math.random(-1, 1) or 1
-    ).Unit
-
-    local flingVec = direction * Vector3.new(
-        math.random(8000, 12000),
+    -- Step 4: Build fling vector (extreme force, random horizontal direction)
+    local sx = math.random(0, 1) == 0 and 1 or -1
+    local sz = math.random(0, 1) == 0 and 1 or -1
+    local flingVec = Vector3.new(
+        sx * math.random(9000, 13000),
         math.random(5000, 8000),
-        math.random(8000, 12000)
+        sz * math.random(9000, 13000)
     )
 
-    local bv    = Instance.new("BodyVelocity")
-    bv.Name     = "FLING_" .. HttpService:GenerateGUID(false)
+    -- Step 5: Inject BodyVelocity with max force
+    local bvName = "FLING_" .. HttpService:GenerateGUID(false)
+    local bv     = Instance.new("BodyVelocity")
+    bv.Name     = bvName
     bv.Velocity = flingVec
     bv.MaxForce = Vector3.new(1e12, 1e12, 1e12)
     bv.P        = 1e9
     bv.Parent   = targetHRP
 
-    -- Step 5: Per-frame velocity override for 0.2 s (beats anti-fling reset loops)
-    local t0 = tick()
+    -- Step 6: Per-frame velocity override for 0.2 s
+    -- Re-injects if anti-fling destroys the mover
+    local t0   = tick()
     local conn
     conn = RunService.Heartbeat:Connect(function()
         if tick() - t0 > 0.2 then
@@ -113,13 +107,14 @@ local function flingPlayer(target)
             end)
             return
         end
+        -- Raw velocity override (beats velocity-reset anti-flings)
         pcall(function()
             targetHRP.AssemblyLinearVelocity = flingVec
         end)
-        -- Re-inject if anti-fling destroyed our bv
-        if not bv.Parent then
-            local bv2    = Instance.new("BodyVelocity")
-            bv2.Name     = bv.Name
+        -- Re-inject mover if it was destroyed
+        if not (bv and bv.Parent) then
+            local bv2     = Instance.new("BodyVelocity")
+            bv2.Name     = bvName
             bv2.Velocity = flingVec
             bv2.MaxForce = Vector3.new(1e12, 1e12, 1e12)
             bv2.P        = 1e9
@@ -128,14 +123,14 @@ local function flingPlayer(target)
         end
     end)
 
-    -- Return to saved spot
+    -- Return home after brief delay
     task.delay(0.07, restorePosition)
 end
 
 -- ════════════════════════════════════════════════
 --  FLING ALL
 -- ════════════════════════════════════════════════
-local flingAllStatusUpdate = nil  -- callback set by GUI
+local flingAllStatusCb = nil  -- set by GUI
 
 local function startFlingAll()
     if flingAllActive then return end
@@ -145,8 +140,8 @@ local function startFlingAll()
             for _, p in ipairs(Players:GetPlayers()) do
                 if not flingAllActive then break end
                 if p ~= LocalPlayer then
-                    if flingAllStatusUpdate then
-                        flingAllStatusUpdate("Flinging: " .. p.Name)
+                    if flingAllStatusCb then
+                        flingAllStatusCb("Flinging: " .. p.Name)
                     end
                     flingPlayer(p)
                     task.wait(0.4)
@@ -154,9 +149,7 @@ local function startFlingAll()
             end
             task.wait(0.5)
         end
-        if flingAllStatusUpdate then
-            flingAllStatusUpdate("Idle — Ready")
-        end
+        if flingAllStatusCb then flingAllStatusCb("Idle — Ready") end
     end)
 end
 
@@ -165,7 +158,7 @@ local function stopFlingAll()
 end
 
 -- ════════════════════════════════════════════════
---  ANTI-FLING SHIELD  (protect local player)
+--  ANTI-FLING SHIELD
 -- ════════════════════════════════════════════════
 local function enableAntiFling()
     if antiFlingConn then return end
@@ -173,15 +166,13 @@ local function enableAntiFling()
         local hrp = getHRP(LocalPlayer)
         local hum = getHumanoid(LocalPlayer)
         if not hrp or not hum then return end
-
-        -- Destroy injected movers
+        -- Remove injected movers
         for _, v in ipairs(hrp:GetChildren()) do
-            if v:IsA("BodyVelocity") or v:IsA("BodyForce") or
-               v:IsA("BodyAngularVelocity") or v:IsA("VectorForce") then
+            if v:IsA("BodyVelocity") or v:IsA("BodyForce")
+            or v:IsA("BodyAngularVelocity") or v:IsA("VectorForce") then
                 v:Destroy()
             end
         end
-
         -- Cap velocity
         pcall(function()
             local vel = hrp.AssemblyLinearVelocity
@@ -189,37 +180,39 @@ local function enableAntiFling()
                 hrp.AssemblyLinearVelocity = vel.Unit * 75
             end
         end)
-
         -- Keep PlatformStand off
         if hum.PlatformStand then hum.PlatformStand = false end
     end)
 end
 
 local function disableAntiFling()
-    if antiFlingConn then antiFlingConn:Disconnect(); antiFlingConn = nil end
+    if antiFlingConn then
+        antiFlingConn:Disconnect()
+        antiFlingConn = nil
+    end
 end
 
 -- ════════════════════════════════════════════════
---  GUI CONSTRUCTION
+--  GUI
 -- ════════════════════════════════════════════════
-local oldGui = LocalPlayer.PlayerGui:FindFirstChild("FlingGUI_v3")
+local oldGui = LocalPlayer.PlayerGui:FindFirstChild("FlingGUI_v31")
 if oldGui then oldGui:Destroy() end
 
-local ScreenGui             = Instance.new("ScreenGui")
-ScreenGui.Name              = "FlingGUI_v3"
-ScreenGui.ResetOnSpawn      = false
-ScreenGui.ZIndexBehavior    = Enum.ZIndexBehavior.Sibling
-ScreenGui.IgnoreGuiInset    = true
-ScreenGui.Parent            = LocalPlayer.PlayerGui
+local ScreenGui          = Instance.new("ScreenGui")
+ScreenGui.Name           = "FlingGUI_v31"
+ScreenGui.ResetOnSpawn   = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.Parent         = LocalPlayer.PlayerGui
 
--- ── Palette ───────────────────────────────────
+-- Colour palette
 local C = {
     bg      = Color3.fromRGB(9,   9,  18),
     panel   = Color3.fromRGB(16,  16, 30),
     card    = Color3.fromRGB(22,  22, 42),
     accent1 = Color3.fromRGB(120, 60, 255),
     accent2 = Color3.fromRGB(60, 180, 255),
-    danger  = Color3.fromRGB(255, 60,  90),
+    danger  = Color3.fromRGB(255,  60,  90),
     success = Color3.fromRGB(60,  230, 130),
     warning = Color3.fromRGB(255, 185,  40),
     text    = Color3.fromRGB(235, 235, 255),
@@ -228,104 +221,111 @@ local C = {
     sel     = Color3.fromRGB(55,  35, 115),
 }
 
--- ── Builders ──────────────────────────────────
-local function corner(r, parent)
+-- ── Factory helpers ───────────────────────────
+local function mkCorner(r, parent)
     local u = Instance.new("UICorner")
     u.CornerRadius = UDim.new(0, r)
     u.Parent = parent
     return u
 end
 
-local function stroke(parent, a, b, t)
+local function mkStroke(parent, colorA, colorB, thickness)
     local s = Instance.new("UIStroke")
-    s.Thickness = t or 1.5
+    s.Thickness = thickness or 1.5
     s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     local g = Instance.new("UIGradient")
-    g.Color    = ColorSequence.new({ ColorSequenceKeypoint.new(0, a), ColorSequenceKeypoint.new(1, b) })
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, colorA),
+        ColorSequenceKeypoint.new(1, colorB),
+    })
     g.Rotation = 45
     g.Parent   = s
     s.Parent   = parent
     return s
 end
 
-local function frame(p)
+local function mkFrame(bg, sz, pos, r, z, parent)
     local f = Instance.new("Frame")
-    f.BackgroundColor3 = p.bg   or C.panel
+    f.BackgroundColor3 = bg
     f.BorderSizePixel  = 0
-    f.Size             = p.sz   or UDim2.new(1,0,1,0)
-    f.Position         = p.pos  or UDim2.new(0,0,0,0)
-    f.ZIndex           = p.z    or 5
-    f.Parent           = p.par
-    if p.r then corner(p.r, f) end
+    f.Size             = sz
+    f.Position         = pos or UDim2.new(0, 0, 0, 0)
+    f.ZIndex           = z  or 5
+    f.Parent           = parent
+    if r then mkCorner(r, f) end
     return f
 end
 
-local function label(p)
+local function mkLabel(text, sz, pos, ts, color, font, ax, ay, wrap, z, parent)
     local l = Instance.new("TextLabel")
     l.BackgroundTransparency = 1
-    l.Text        = p.text  or ""
-    l.TextColor3  = p.color or C.text
-    l.Font        = p.font  or Enum.Font.GothamBold
-    l.TextSize    = p.ts    or 13
-    l.TextXAlignment = p.ax or Enum.TextXAlignment.Left
-    l.TextYAlignment = p.ay or Enum.TextYAlignment.Center
-    l.TextWrapped = p.wrap  or false
-    l.Size        = p.sz    or UDim2.new(1,0,1,0)
-    l.Position    = p.pos   or UDim2.new(0,0,0,0)
-    l.ZIndex      = p.z     or 6
-    l.Parent      = p.par
+    l.Text           = text  or ""
+    l.TextColor3     = color or C.text
+    l.Font           = font  or Enum.Font.GothamBold
+    l.TextSize       = ts    or 13
+    l.TextXAlignment = ax    or Enum.TextXAlignment.Left
+    l.TextYAlignment = ay    or Enum.TextYAlignment.Center
+    l.TextWrapped    = wrap  or false
+    l.Size           = sz    or UDim2.new(1, 0, 1, 0)
+    l.Position       = pos   or UDim2.new(0, 0, 0, 0)
+    l.ZIndex         = z     or 6
+    l.Parent         = parent
     return l
 end
 
-local function gradLabel(lbl, ca, cb)
-    local g = Instance.new("UIGradient")
-    g.Color    = ColorSequence.new({ ColorSequenceKeypoint.new(0,ca), ColorSequenceKeypoint.new(1,cb) })
-    g.Rotation = 0
-    g.Parent   = lbl
-end
-
-local function btn(p)
+local function mkBtn(text, bgColor, g1, g2, tc, sz, pos, r, ts, z, parent)
     local b = Instance.new("TextButton")
-    b.BackgroundColor3  = p.bg   or C.accent1
-    b.TextColor3        = p.tc   or C.text
-    b.Font              = Enum.Font.GothamBold
-    b.TextSize          = p.ts   or 13
-    b.Text              = p.text or "Btn"
-    b.BorderSizePixel   = 0
-    b.AutoButtonColor   = false
-    b.Size              = p.sz   or UDim2.new(1,0,0,38)
-    b.Position          = p.pos  or UDim2.new(0,0,0,0)
-    b.ZIndex            = p.z    or 6
-    b.Parent            = p.par
-    if p.r  then corner(p.r, b) end
-    if p.g1 then
+    b.BackgroundColor3 = bgColor or C.accent1
+    b.TextColor3       = tc      or C.text
+    b.Font             = Enum.Font.GothamBold
+    b.TextSize         = ts      or 13
+    b.Text             = text    or "Btn"
+    b.BorderSizePixel  = 0
+    b.AutoButtonColor  = false
+    b.Size             = sz      or UDim2.new(1, 0, 0, 38)
+    b.Position         = pos     or UDim2.new(0, 0, 0, 0)
+    b.ZIndex           = z       or 6
+    b.Parent           = parent
+    if r then mkCorner(r, b) end
+    if g1 and g2 then
         local gr = Instance.new("UIGradient")
-        gr.Color    = ColorSequence.new({ ColorSequenceKeypoint.new(0,p.g1), ColorSequenceKeypoint.new(1,p.g2) })
+        gr.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, g1),
+            ColorSequenceKeypoint.new(1, g2),
+        })
         gr.Rotation = 90
         gr.Parent   = b
     end
-    local origSz = p.sz or UDim2.new(1,0,0,38)
+    -- Hover / press micro-animations
+    local origSz = sz or UDim2.new(1, 0, 0, 38)
     b.MouseEnter:Connect(function()
         TweenService:Create(b, TweenInfo.new(0.13), {
             BackgroundTransparency = 0.18,
-            Size = UDim2.new(origSz.X.Scale, origSz.X.Offset+2, origSz.Y.Scale, origSz.Y.Offset+2)
+            Size = UDim2.new(
+                origSz.X.Scale, origSz.X.Offset + 2,
+                origSz.Y.Scale, origSz.Y.Offset + 2
+            ),
         }):Play()
     end)
     b.MouseLeave:Connect(function()
         TweenService:Create(b, TweenInfo.new(0.13), {
             BackgroundTransparency = 0,
-            Size = origSz
+            Size = origSz,
         }):Play()
     end)
     b.MouseButton1Down:Connect(function()
         TweenService:Create(b, TweenInfo.new(0.07), {
             BackgroundTransparency = 0.35,
-            Size = UDim2.new(origSz.X.Scale, origSz.X.Offset-2, origSz.Y.Scale, origSz.Y.Offset-2)
+            Size = UDim2.new(
+                origSz.X.Scale, origSz.X.Offset - 2,
+                origSz.Y.Scale, origSz.Y.Offset - 2
+            ),
         }):Play()
     end)
     b.MouseButton1Up:Connect(function()
         TweenService:Create(b, TweenInfo.new(0.1), {
-            BackgroundTransparency = 0, Size = origSz
+            BackgroundTransparency = 0,
+            Size = origSz,
         }):Play()
     end)
     return b
@@ -334,90 +334,119 @@ end
 -- ════════════════════════════════════════════════
 --  MAIN WINDOW
 -- ════════════════════════════════════════════════
-local W, H = 382, 585
+local W, H = 384, 590
 
-local Main = frame({
-    bg  = C.bg,
-    sz  = UDim2.new(0, W, 0, H),
-    pos = UDim2.new(0.5, -W/2, 0.5, -H/2),
-    r   = 18,
-    z   = 5,
-    par = ScreenGui,
-})
--- background gradient
-do
+local Main = mkFrame(
+    C.bg,
+    UDim2.new(0, W, 0, H),
+    UDim2.new(0.5, -W/2, 0.5, -H/2),
+    18, 5, ScreenGui
+)
+
+do -- background gradient
     local g = Instance.new("UIGradient")
     g.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0,   Color3.fromRGB(12, 9, 26)),
-        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(9,  9, 18)),
-        ColorSequenceKeypoint.new(1,   Color3.fromRGB(9, 13, 26)),
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(12, 9,  26)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(9,  9,  18)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(9,  13, 26)),
     })
     g.Rotation = 135
     g.Parent   = Main
 end
-local mainStroke = stroke(Main, C.accent1, C.accent2, 1.8)
+
+local mainStroke = mkStroke(Main, C.accent1, C.accent2, 1.8)
 
 -- ── Title bar ─────────────────────────────────
-local TBar = frame({ bg=C.panel, sz=UDim2.new(1,0,0,54), r=18, z=6, par=Main })
--- flatten bottom corners
-local TBarFix = frame({ bg=C.panel, sz=UDim2.new(1,0,0,18), pos=UDim2.new(0,0,1,-18), z=6, par=TBar })
-do
+local TBar = mkFrame(C.panel, UDim2.new(1,0,0,54), UDim2.new(0,0,0,0), 18, 6, Main)
+
+-- Flatten bottom corners of TBar
+mkFrame(C.panel, UDim2.new(1,0,0,18), UDim2.new(0,0,1,-18), 0, 6, TBar)
+
+do -- title bar gradient
     local g = Instance.new("UIGradient")
     g.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(28,14,58)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(10,18,48)),
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(28, 14, 58)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(10, 18, 48)),
     })
     g.Rotation = 90
     g.Parent   = TBar
 end
 
--- icon
-local ico = label({ text="⚡", sz=UDim2.new(0,36,0,36), pos=UDim2.new(0,12,0.5,-18), ts=22, ax=Enum.TextXAlignment.Center, z=7, par=TBar })
+-- Icon
+mkLabel("⚡",
+    UDim2.new(0,36,0,36), UDim2.new(0,12,0.5,-18),
+    22, C.text, Enum.Font.GothamBold,
+    Enum.TextXAlignment.Center, Enum.TextYAlignment.Center,
+    false, 7, TBar
+)
 
--- title
-local titLbl = label({ text="FLING  SCRIPT", sz=UDim2.new(0,195,0,36), pos=UDim2.new(0,52,0.5,-18), ts=17, ax=Enum.TextXAlignment.Left, z=7, par=TBar })
-gradLabel(titLbl, Color3.fromRGB(210,145,255), Color3.fromRGB(100,210,255))
+-- Title label + gradient
+local titLbl = mkLabel("FLING  SCRIPT",
+    UDim2.new(0,200,0,36), UDim2.new(0,52,0.5,-18),
+    17, C.text, Enum.Font.GothamBold,
+    Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+    false, 7, TBar
+)
+do
+    local g = Instance.new("UIGradient")
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(210, 145, 255)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(100, 210, 255)),
+    })
+    g.Rotation = 0
+    g.Parent   = titLbl
+end
 
-local verLbl = label({ text="v3.0", sz=UDim2.new(0,44,0,18), pos=UDim2.new(1,-56,0.5,-9), ts=11, ax=Enum.TextXAlignment.Center, color=C.sub, font=Enum.Font.Gotham, z=7, par=TBar })
+-- Version
+mkLabel("v3.1",
+    UDim2.new(0,44,0,18), UDim2.new(1,-56,0.5,-9),
+    11, C.sub, Enum.Font.Gotham,
+    Enum.TextXAlignment.Center, Enum.TextYAlignment.Center,
+    false, 7, TBar
+)
 
--- close button
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size             = UDim2.new(0,28,0,28)
-closeBtn.Position         = UDim2.new(1,-38,0.5,-14)
-closeBtn.BackgroundColor3 = Color3.fromRGB(200,50,70)
-closeBtn.TextColor3       = Color3.new(1,1,1)
-closeBtn.Font             = Enum.Font.GothamBold
-closeBtn.TextSize         = 13
-closeBtn.Text             = "✕"
-closeBtn.BorderSizePixel  = 0
-closeBtn.AutoButtonColor  = false
-closeBtn.ZIndex           = 8
-closeBtn.Parent           = TBar
-corner(8, closeBtn)
-closeBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+-- Close button
+do
+    local b = Instance.new("TextButton")
+    b.Size             = UDim2.new(0, 28, 0, 28)
+    b.Position         = UDim2.new(1, -38, 0.5, -14)
+    b.BackgroundColor3 = Color3.fromRGB(200, 50, 70)
+    b.TextColor3       = Color3.new(1, 1, 1)
+    b.Font             = Enum.Font.GothamBold
+    b.TextSize         = 13
+    b.Text             = "✕"
+    b.BorderSizePixel  = 0
+    b.AutoButtonColor  = false
+    b.ZIndex           = 8
+    b.Parent           = TBar
+    mkCorner(8, b)
+    b.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+end
 
--- minimize button
-local minBtn = Instance.new("TextButton")
-minBtn.Size             = UDim2.new(0,28,0,28)
-minBtn.Position         = UDim2.new(1,-70,0.5,-14)
-minBtn.BackgroundColor3 = Color3.fromRGB(215,145,25)
-minBtn.TextColor3       = Color3.new(1,1,1)
-minBtn.Font             = Enum.Font.GothamBold
-minBtn.TextSize         = 15
-minBtn.Text             = "—"
-minBtn.BorderSizePixel  = 0
-minBtn.AutoButtonColor  = false
-minBtn.ZIndex           = 8
-minBtn.Parent           = TBar
-corner(8, minBtn)
-
+-- Minimise button
 local minimized = false
-minBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    TweenService:Create(Main, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {
-        Size = minimized and UDim2.new(0,W,0,54) or UDim2.new(0,W,0,H)
-    }):Play()
-end)
+do
+    local b = Instance.new("TextButton")
+    b.Size             = UDim2.new(0, 28, 0, 28)
+    b.Position         = UDim2.new(1, -70, 0.5, -14)
+    b.BackgroundColor3 = Color3.fromRGB(215, 145, 25)
+    b.TextColor3       = Color3.new(1, 1, 1)
+    b.Font             = Enum.Font.GothamBold
+    b.TextSize         = 15
+    b.Text             = "—"
+    b.BorderSizePixel  = 0
+    b.AutoButtonColor  = false
+    b.ZIndex           = 8
+    b.Parent           = TBar
+    mkCorner(8, b)
+    b.MouseButton1Click:Connect(function()
+        minimized = not minimized
+        TweenService:Create(Main,
+            TweenInfo.new(0.25, Enum.EasingStyle.Quad),
+            { Size = minimized and UDim2.new(0,W,0,54) or UDim2.new(0,W,0,H) }
+        ):Play()
+    end)
+end
 
 -- ── Drag ──────────────────────────────────────
 do
@@ -425,14 +454,20 @@ do
     TBar.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1
         or i.UserInputType == Enum.UserInputType.Touch then
-            dragging, ds, sp = true, i.Position, Main.Position
+            dragging = true
+            ds = i.Position
+            sp = Main.Position
         end
     end)
     UserInputService.InputChanged:Connect(function(i)
-        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement
-                      or i.UserInputType == Enum.UserInputType.Touch) then
+        if dragging and
+           (i.UserInputType == Enum.UserInputType.MouseMovement
+         or i.UserInputType == Enum.UserInputType.Touch) then
             local d = i.Position - ds
-            Main.Position = UDim2.new(sp.X.Scale, sp.X.Offset+d.X, sp.Y.Scale, sp.Y.Offset+d.Y)
+            Main.Position = UDim2.new(
+                sp.X.Scale, sp.X.Offset + d.X,
+                sp.Y.Scale, sp.Y.Offset + d.Y
+            )
         end
     end)
     UserInputService.InputEnded:Connect(function(i)
@@ -443,137 +478,186 @@ do
     end)
 end
 
--- ── Content scroll wrapper ────────────────────
+-- ── Scrollable content area ───────────────────
 local Content = Instance.new("ScrollingFrame")
 Content.Size                   = UDim2.new(1, -20, 1, -62)
 Content.Position               = UDim2.new(0, 10, 0, 58)
 Content.BackgroundTransparency = 1
 Content.BorderSizePixel        = 0
 Content.ScrollBarThickness     = 0
-Content.CanvasSize             = UDim2.new(0,0,0,0)
+Content.CanvasSize             = UDim2.new(0, 0, 0, 0)
 Content.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 Content.ZIndex                 = 5
 Content.Parent                 = Main
 
-local contentLayout = Instance.new("UIListLayout")
-contentLayout.Padding       = UDim.new(0, 8)
-contentLayout.SortOrder     = Enum.SortOrder.LayoutOrder
-contentLayout.FillDirection = Enum.FillDirection.Vertical
-contentLayout.Parent        = Content
+local cLayout = Instance.new("UIListLayout")
+cLayout.Padding       = UDim.new(0, 8)
+cLayout.SortOrder     = Enum.SortOrder.LayoutOrder
+cLayout.FillDirection = Enum.FillDirection.Vertical
+cLayout.Parent        = Content
 
 -- ════════════════════════════════════════════════
---  STATUS BAR
+--  STATUS BAR  (LayoutOrder 0)
 -- ════════════════════════════════════════════════
-local statCard = frame({ bg=C.card, sz=UDim2.new(1,0,0,36), r=9, z=5, par=Content })
+local statCard = mkFrame(C.card, UDim2.new(1,0,0,36), UDim2.new(0,0,0,0), 9, 5, Content)
 statCard.LayoutOrder = 0
-stroke(statCard, C.accent1, C.accent2, 1)
+mkStroke(statCard, C.accent1, C.accent2, 1)
 
-local statDot = frame({ bg=C.success, sz=UDim2.new(0,8,0,8), pos=UDim2.new(0,10,0.5,-4), r=99, z=6, par=statCard })
+local statDot = mkFrame(
+    C.success,
+    UDim2.new(0, 8, 0, 8), UDim2.new(0, 10, 0.5, -4),
+    99, 6, statCard
+)
 
-local statLbl = label({
-    text  = "Idle — Ready",
-    sz    = UDim2.new(1,-28,1,0),
-    pos   = UDim2.new(0,24,0,0),
-    color = C.sub,
-    font  = Enum.Font.Gotham,
-    ts    = 12,
-    z     = 6,
-    par   = statCard,
-})
+local statLbl = mkLabel(
+    "Idle — Ready",
+    UDim2.new(1,-28,1,0), UDim2.new(0,24,0,0),
+    12, C.sub, Enum.Font.Gotham,
+    Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+    false, 6, statCard
+)
 
 local function setStatus(msg, col)
     statLbl.Text = msg
     statDot.BackgroundColor3 = col or C.success
 end
 
-flingAllStatusUpdate = function(msg) setStatus(msg, C.danger) end
+flingAllStatusCb = function(msg) setStatus(msg, C.danger) end
 
 -- ════════════════════════════════════════════════
---  ANTI-FLING TOGGLE CARD
+--  ANTI-FLING SHIELD CARD  (LayoutOrder 1)
 -- ════════════════════════════════════════════════
-local shCard = frame({ bg=C.card, sz=UDim2.new(1,0,0,48), r=9, z=5, par=Content })
+local shCard = mkFrame(C.card, UDim2.new(1,0,0,48), UDim2.new(0,0,0,0), 9, 5, Content)
 shCard.LayoutOrder = 1
-stroke(shCard, C.success, C.accent2, 1)
+mkStroke(shCard, C.success, C.accent2, 1)
 
-label({ text="🛡", sz=UDim2.new(0,30,1,0), pos=UDim2.new(0,10,0,0), ts=18, ax=Enum.TextXAlignment.Center, z=6, par=shCard })
-label({ text="Anti-Fling Shield", sz=UDim2.new(0,170,0,22), pos=UDim2.new(0,44,0,5), ts=13, z=6, par=shCard })
-label({ text="Protect yourself from enemy flings", sz=UDim2.new(0,220,0,16), pos=UDim2.new(0,44,0,25), ts=10, color=C.sub, font=Enum.Font.Gotham, z=6, par=shCard })
+mkLabel("🛡",
+    UDim2.new(0,30,1,0), UDim2.new(0,10,0,0),
+    18, C.text, Enum.Font.GothamBold,
+    Enum.TextXAlignment.Center, Enum.TextYAlignment.Center,
+    false, 6, shCard
+)
+mkLabel("Anti-Fling Shield",
+    UDim2.new(0,175,0,22), UDim2.new(0,44,0,5),
+    13, C.text, Enum.Font.GothamBold,
+    Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+    false, 6, shCard
+)
+mkLabel("Protect yourself from enemy flings",
+    UDim2.new(0,230,0,16), UDim2.new(0,44,0,25),
+    10, C.sub, Enum.Font.Gotham,
+    Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+    false, 6, shCard
+)
 
-local togBg = frame({ bg=Color3.fromRGB(38,38,58), sz=UDim2.new(0,48,0,24), pos=UDim2.new(1,-58,0.5,-12), r=99, z=6, par=shCard })
-local togKnob = frame({ bg=Color3.fromRGB(150,150,170), sz=UDim2.new(0,20,0,20), pos=UDim2.new(0,2,0.5,-10), r=99, z=7, par=togBg })
-local togBtn = Instance.new("TextButton")
-togBtn.BackgroundTransparency = 1
-togBtn.Size   = UDim2.new(1,0,1,0)
-togBtn.Text   = ""
-togBtn.ZIndex = 8
-togBtn.Parent = togBg
-
-togBtn.MouseButton1Click:Connect(function()
-    antiFlingEnabled = not antiFlingEnabled
-    if antiFlingEnabled then
-        enableAntiFling()
-        TweenService:Create(togBg,   TweenInfo.new(0.2), { BackgroundColor3 = C.success }):Play()
-        TweenService:Create(togKnob, TweenInfo.new(0.2), { Position=UDim2.new(0,26,0.5,-10), BackgroundColor3=Color3.new(1,1,1) }):Play()
-        setStatus("Shield ON — Protected", C.success)
-    else
-        disableAntiFling()
-        TweenService:Create(togBg,   TweenInfo.new(0.2), { BackgroundColor3 = Color3.fromRGB(38,38,58) }):Play()
-        TweenService:Create(togKnob, TweenInfo.new(0.2), { Position=UDim2.new(0,2,0.5,-10), BackgroundColor3=Color3.fromRGB(150,150,170) }):Play()
-        setStatus("Idle — Ready", C.success)
-    end
-end)
+local togBg = mkFrame(
+    Color3.fromRGB(38,38,58),
+    UDim2.new(0,48,0,24), UDim2.new(1,-58,0.5,-12),
+    99, 6, shCard
+)
+local togKnob = mkFrame(
+    Color3.fromRGB(150,150,170),
+    UDim2.new(0,20,0,20), UDim2.new(0,2,0.5,-10),
+    99, 7, togBg
+)
+do
+    local tb = Instance.new("TextButton")
+    tb.BackgroundTransparency = 1
+    tb.Size   = UDim2.new(1, 0, 1, 0)
+    tb.Text   = ""
+    tb.ZIndex = 8
+    tb.Parent = togBg
+    tb.MouseButton1Click:Connect(function()
+        antiFlingEnabled = not antiFlingEnabled
+        if antiFlingEnabled then
+            enableAntiFling()
+            TweenService:Create(togBg,   TweenInfo.new(0.2), { BackgroundColor3 = C.success }):Play()
+            TweenService:Create(togKnob, TweenInfo.new(0.2), {
+                Position         = UDim2.new(0, 26, 0.5, -10),
+                BackgroundColor3 = Color3.new(1, 1, 1),
+            }):Play()
+            setStatus("Shield ON — You are protected", C.success)
+        else
+            disableAntiFling()
+            TweenService:Create(togBg,   TweenInfo.new(0.2), { BackgroundColor3 = Color3.fromRGB(38,38,58) }):Play()
+            TweenService:Create(togKnob, TweenInfo.new(0.2), {
+                Position         = UDim2.new(0, 2, 0.5, -10),
+                BackgroundColor3 = Color3.fromRGB(150,150,170),
+            }):Play()
+            setStatus("Idle — Ready", C.success)
+        end
+    end)
+end
 
 -- ════════════════════════════════════════════════
---  PLAYER LIST HEADER
+--  PLAYER LIST HEADER  (LayoutOrder 2)
 -- ════════════════════════════════════════════════
-local listHdr = frame({ bg=Color3.fromRGB(0,0,0), sz=UDim2.new(1,0,0,28), r=0, z=5, par=Content })
+local listHdr = mkFrame(
+    Color3.fromRGB(0,0,0),
+    UDim2.new(1,0,0,28), UDim2.new(0,0,0,0),
+    0, 5, Content
+)
 listHdr.BackgroundTransparency = 1
 listHdr.LayoutOrder = 2
 
-label({ text="👥  Players", sz=UDim2.new(0.6,0,1,0), ts=13, z=6, par=listHdr })
-local selHint = label({ text="Select up to 3", sz=UDim2.new(0.4,-2,1,0), pos=UDim2.new(0.6,2,0,0), ts=10, color=C.sub, font=Enum.Font.Gotham, ax=Enum.TextXAlignment.Right, z=6, par=listHdr })
+mkLabel("👥  Players",
+    UDim2.new(0.6,0,1,0), UDim2.new(0,0,0,0),
+    13, C.text, Enum.Font.GothamBold,
+    Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+    false, 6, listHdr
+)
+local selHint = mkLabel("Select up to 3",
+    UDim2.new(0.4,-2,1,0), UDim2.new(0.6,2,0,0),
+    10, C.sub, Enum.Font.Gotham,
+    Enum.TextXAlignment.Right, Enum.TextYAlignment.Center,
+    false, 6, listHdr
+)
 
--- ── Scroll box ────────────────────────────────
-local scrollOuter = frame({ bg=C.card, sz=UDim2.new(1,0,0,195), r=10, z=5, par=Content })
+-- ── Scroll box  (LayoutOrder 3) ───────────────
+local scrollOuter = mkFrame(C.card, UDim2.new(1,0,0,195), UDim2.new(0,0,0,0), 10, 5, Content)
 scrollOuter.LayoutOrder = 3
-stroke(scrollOuter, C.border, C.border, 1)
+mkStroke(scrollOuter, C.border, C.border, 1)
 
 local pScroll = Instance.new("ScrollingFrame")
-pScroll.Size                   = UDim2.new(1,-4,1,-4)
-pScroll.Position               = UDim2.new(0,2,0,2)
+pScroll.Size                   = UDim2.new(1, -4, 1, -4)
+pScroll.Position               = UDim2.new(0, 2, 0, 2)
 pScroll.BackgroundTransparency = 1
 pScroll.BorderSizePixel        = 0
 pScroll.ScrollBarThickness     = 4
 pScroll.ScrollBarImageColor3   = C.accent1
-pScroll.CanvasSize             = UDim2.new(0,0,0,0)
+pScroll.CanvasSize             = UDim2.new(0, 0, 0, 0)
 pScroll.AutomaticCanvasSize    = Enum.AutomaticSize.Y
 pScroll.ZIndex                 = 6
 pScroll.Parent                 = scrollOuter
 
 local pLayout = Instance.new("UIListLayout")
-pLayout.Padding     = UDim.new(0,4)
+pLayout.Padding     = UDim.new(0, 4)
 pLayout.SortOrder   = Enum.SortOrder.Name
 pLayout.Parent      = pScroll
 
+-- NOTE: Lua 5.1 does NOT support chained assignment (a = b = c)
+-- Each property must be set individually.
 local pPad = Instance.new("UIPadding")
-pPad.PaddingLeft = pPad.PaddingRight = pPad.PaddingTop = pPad.PaddingBottom = UDim.new(0,4)
-pPad.Parent = pScroll
+pPad.PaddingLeft   = UDim.new(0, 4)
+pPad.PaddingRight  = UDim.new(0, 4)
+pPad.PaddingTop    = UDim.new(0, 4)
+pPad.PaddingBottom = UDim.new(0, 4)
+pPad.Parent        = pScroll
 
--- ── Player rows ───────────────────────────────
-local rowMap = {}   -- [player] = { bg=Frame, check=Label }
+-- ── Player row builder ────────────────────────
+local rowMap = {}
 
 local function updateRow(player)
     local r = rowMap[player]
     if not r then return end
     local isSel = selectedPlayers[player] == true
     TweenService:Create(r.bg, TweenInfo.new(0.13), {
-        BackgroundColor3 = isSel and C.sel or C.panel
+        BackgroundColor3 = isSel and C.sel or C.panel,
     }):Play()
     r.check.Text = isSel and "✓" or ""
-    -- stroke
     local s = r.bg:FindFirstChildOfClass("UIStroke")
     if isSel then
-        if not s then stroke(r.bg, C.accent1, C.accent2, 1.2) end
+        if not s then mkStroke(r.bg, C.accent1, C.accent2, 1.2) end
     else
         if s then s:Destroy() end
     end
@@ -582,55 +666,76 @@ end
 local function addRow(player)
     if rowMap[player] then return end
 
-    local row = frame({ bg=C.panel, sz=UDim2.new(1,0,0,42), r=8, z=7, par=pScroll })
+    local row = mkFrame(C.panel, UDim2.new(1,0,0,42), UDim2.new(0,0,0,0), 8, 7, pScroll)
 
-    -- avatar
+    -- Avatar
     local av = Instance.new("ImageLabel")
-    av.Size             = UDim2.new(0,32,0,32)
-    av.Position         = UDim2.new(0,5,0.5,-16)
+    av.Size             = UDim2.new(0, 32, 0, 32)
+    av.Position         = UDim2.new(0, 5, 0.5, -16)
     av.BackgroundColor3 = C.card
     av.BorderSizePixel  = 0
     av.ZIndex           = 8
     av.Parent           = row
+    mkCorner(7, av)
     pcall(function()
-        av.Image = "https://www.roblox.com/headshot-thumbnail/image?userId="..player.UserId.."&width=48&height=48&format=png"
+        av.Image = "https://www.roblox.com/headshot-thumbnail/image?userId="
+            .. player.UserId .. "&width=48&height=48&format=png"
     end)
-    corner(7, av)
 
     local isSelf = player == LocalPlayer
 
-    label({ text=(isSelf and "(You)  " or "")..player.Name, sz=UDim2.new(1,-82,0,20), pos=UDim2.new(0,42,0,5), ts=13, color=isSelf and C.sub or C.text, z=8, par=row })
-    label({ text="@"..player.Name, sz=UDim2.new(1,-82,0,14), pos=UDim2.new(0,42,0,24), ts=10, color=C.sub, font=Enum.Font.Gotham, z=8, par=row })
+    mkLabel(
+        (isSelf and "(You)  " or "") .. player.Name,
+        UDim2.new(1,-82,0,20), UDim2.new(0,42,0,5),
+        13, isSelf and C.sub or C.text, Enum.Font.GothamBold,
+        Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+        false, 8, row
+    )
+    mkLabel(
+        "@" .. player.Name,
+        UDim2.new(1,-82,0,14), UDim2.new(0,42,0,24),
+        10, C.sub, Enum.Font.Gotham,
+        Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+        false, 8, row
+    )
 
-    local chk = label({ text="", sz=UDim2.new(0,26,0,26), pos=UDim2.new(1,-32,0.5,-13), ts=15, color=C.accent2, ax=Enum.TextXAlignment.Center, z=8, par=row })
+    local chk = mkLabel("",
+        UDim2.new(0,26,0,26), UDim2.new(1,-32,0.5,-13),
+        15, C.accent2, Enum.Font.GothamBold,
+        Enum.TextXAlignment.Center, Enum.TextYAlignment.Center,
+        false, 8, row
+    )
 
-    rowMap[player] = { bg=row, check=chk }
+    rowMap[player] = { bg = row, check = chk }
 
     if not isSelf then
-        local clickArea = Instance.new("TextButton")
-        clickArea.BackgroundTransparency = 1
-        clickArea.Size   = UDim2.new(1,0,1,0)
-        clickArea.Text   = ""
-        clickArea.ZIndex = 9
-        clickArea.Parent = row
-
-        clickArea.MouseButton1Click:Connect(function()
+        local ca = Instance.new("TextButton")
+        ca.BackgroundTransparency = 1
+        ca.Size   = UDim2.new(1, 0, 1, 0)
+        ca.Text   = ""
+        ca.ZIndex = 9
+        ca.Parent = row
+        ca.MouseButton1Click:Connect(function()
             if selectedPlayers[player] then
                 selectedPlayers[player] = nil
             else
+                -- Max 3 selected
                 local cnt = 0
                 for _ in pairs(selectedPlayers) do cnt = cnt + 1 end
                 if cnt >= 3 then
                     local first
                     for k in pairs(selectedPlayers) do first = k; break end
-                    if first then selectedPlayers[first] = nil; updateRow(first) end
+                    if first then
+                        selectedPlayers[first] = nil
+                        updateRow(first)
+                    end
                 end
                 selectedPlayers[player] = true
             end
             updateRow(player)
             local n = 0
             for _ in pairs(selectedPlayers) do n = n + 1 end
-            selHint.Text = n == 0 and "Select up to 3" or (n.." selected")
+            selHint.Text = n == 0 and "Select up to 3" or (n .. " selected")
         end)
     end
 end
@@ -642,79 +747,106 @@ local function removeRow(player)
 end
 
 local function refreshList()
-    for p, r in pairs(rowMap) do r.bg:Destroy() end
-    rowMap = {}
-    selectedPlayers = {}
-    selHint.Text = "Select up to 3"
+    for _, r in pairs(rowMap) do r.bg:Destroy() end
+    rowMap            = {}
+    selectedPlayers   = {}
+    selHint.Text      = "Select up to 3"
     for _, p in ipairs(Players:GetPlayers()) do addRow(p) end
-    setStatus("Refreshed — "..#Players:GetPlayers().." player(s)", C.accent2)
+    setStatus("Refreshed — " .. #Players:GetPlayers() .. " player(s)", C.accent2)
 end
 
-Players.PlayerAdded:Connect(function(p) task.wait(0.3); addRow(p) end)
+Players.PlayerAdded:Connect(function(p)
+    task.wait(0.3)
+    addRow(p)
+end)
 Players.PlayerRemoving:Connect(removeRow)
+
 refreshList()
 
 -- ════════════════════════════════════════════════
---  ACTION BUTTONS (2 rows)
+--  BUTTON ROW 1: Refresh | Fling Selected  (LayoutOrder 4)
 -- ════════════════════════════════════════════════
-
--- row 1: Refresh | Fling Selected
-local row1 = frame({ bg=Color3.fromRGB(0,0,0), sz=UDim2.new(1,0,0,40), r=0, z=5, par=Content })
+local row1 = mkFrame(
+    Color3.fromRGB(0,0,0),
+    UDim2.new(1,0,0,40), UDim2.new(0,0,0,0),
+    0, 5, Content
+)
 row1.BackgroundTransparency = 1
 row1.LayoutOrder = 4
 
-local refreshBtn = btn({
-    text="🔄  Refresh", bg=C.card,
-    g1=Color3.fromRGB(28,28,58), g2=Color3.fromRGB(18,18,40),
-    sz=UDim2.new(0.48,0,1,0), pos=UDim2.new(0,0,0,0),
-    r=10, ts=13, z=6, par=row1,
-})
-stroke(refreshBtn, C.border, C.accent1, 1)
+local refreshBtn = mkBtn(
+    "🔄  Refresh",
+    C.card,
+    Color3.fromRGB(28,28,58), Color3.fromRGB(18,18,40),
+    C.text,
+    UDim2.new(0.48,0,1,0), UDim2.new(0,0,0,0),
+    10, 13, 6, row1
+)
+mkStroke(refreshBtn, C.border, C.accent1, 1)
 
-local flingSelBtn = btn({
-    text="⚡  Fling Selected",
-    g1=Color3.fromRGB(140,60,255), g2=Color3.fromRGB(88,38,178),
-    sz=UDim2.new(0.5,0,1,0), pos=UDim2.new(0.5,0,0,0),
-    r=10, ts=13, z=6, par=row1,
-})
-stroke(flingSelBtn, C.accent1, C.accent2, 1.2)
+local flingSelBtn = mkBtn(
+    "⚡  Fling Selected",
+    C.accent1,
+    Color3.fromRGB(140,60,255), Color3.fromRGB(88,38,178),
+    C.text,
+    UDim2.new(0.5,0,1,0), UDim2.new(0.5,0,0,0),
+    10, 13, 6, row1
+)
+mkStroke(flingSelBtn, C.accent1, C.accent2, 1.2)
 
--- row 2: Fling All | Stop
-local row2 = frame({ bg=Color3.fromRGB(0,0,0), sz=UDim2.new(1,0,0,40), r=0, z=5, par=Content })
+-- ════════════════════════════════════════════════
+--  BUTTON ROW 2: Fling All | Stop  (LayoutOrder 5)
+-- ════════════════════════════════════════════════
+local row2 = mkFrame(
+    Color3.fromRGB(0,0,0),
+    UDim2.new(1,0,0,40), UDim2.new(0,0,0,0),
+    0, 5, Content
+)
 row2.BackgroundTransparency = 1
 row2.LayoutOrder = 5
 
-local flingAllBtn = btn({
-    text="💀  Fling All",
-    g1=Color3.fromRGB(255,60,90), g2=Color3.fromRGB(178,28,55),
-    sz=UDim2.new(0.48,0,1,0), pos=UDim2.new(0,0,0,0),
-    r=10, ts=13, z=6, par=row2,
-})
-stroke(flingAllBtn, C.danger, Color3.fromRGB(255,135,55), 1.2)
+local flingAllBtn = mkBtn(
+    "💀  Fling All",
+    C.danger,
+    Color3.fromRGB(255,60,90), Color3.fromRGB(178,28,55),
+    C.text,
+    UDim2.new(0.48,0,1,0), UDim2.new(0,0,0,0),
+    10, 13, 6, row2
+)
+mkStroke(flingAllBtn, C.danger, Color3.fromRGB(255,135,55), 1.2)
 
-local stopBtn = btn({
-    text="🛑  Stop",
-    g1=Color3.fromRGB(255,195,45), g2=Color3.fromRGB(200,138,18),
-    tc=Color3.fromRGB(20,10,0),
-    sz=UDim2.new(0.5,0,1,0), pos=UDim2.new(0.5,0,0,0),
-    r=10, ts=13, z=6, par=row2,
-})
-stroke(stopBtn, C.warning, Color3.fromRGB(255,118,18), 1.2)
+local stopBtn = mkBtn(
+    "🛑  Stop",
+    C.warning,
+    Color3.fromRGB(255,195,45), Color3.fromRGB(200,138,18),
+    Color3.fromRGB(20,10,0),
+    UDim2.new(0.5,0,1,0), UDim2.new(0.5,0,0,0),
+    10, 13, 6, row2
+)
+mkStroke(stopBtn, C.warning, Color3.fromRGB(255,118,18), 1.2)
 
--- ── Info footer ───────────────────────────────
-local infoCard = frame({ bg=C.card, sz=UDim2.new(1,0,0,52), r=9, z=5, par=Content })
+-- ════════════════════════════════════════════════
+--  INFO FOOTER  (LayoutOrder 6)
+-- ════════════════════════════════════════════════
+local infoCard = mkFrame(C.card, UDim2.new(1,0,0,52), UDim2.new(0,0,0,0), 9, 5, Content)
 infoCard.LayoutOrder = 6
-stroke(infoCard, C.border, C.border, 1)
+mkStroke(infoCard, C.border, C.border, 1)
 
 local infoPad = Instance.new("UIPadding")
-infoPad.PaddingLeft = infoPad.PaddingRight = infoPad.PaddingTop = infoPad.PaddingBottom = UDim.new(0,10)
-infoPad.Parent = infoCard
+infoPad.PaddingLeft   = UDim.new(0, 10)
+infoPad.PaddingRight  = UDim.new(0, 10)
+infoPad.PaddingTop    = UDim.new(0, 6)
+infoPad.PaddingBottom = UDim.new(0, 6)
+infoPad.Parent        = infoCard
 
-label({
-    text="⚡ Tap players to select (max 3) · Fling Selected to launch them\n💀 Fling All cycles everyone · 🛑 Stop returns you to where you were",
-    sz=UDim2.new(1,0,1,0), ts=10, color=C.sub, font=Enum.Font.Gotham,
-    wrap=true, ay=Enum.TextYAlignment.Center, z=6, par=infoCard,
-})
+mkLabel(
+    "⚡ Tap players to select (max 3)  ·  Fling Selected to launch\n"
+ .. "💀 Fling All cycles everyone  ·  🛑 Stop returns you home",
+    UDim2.new(1,0,1,0), UDim2.new(0,0,0,0),
+    10, C.sub, Enum.Font.Gotham,
+    Enum.TextXAlignment.Left, Enum.TextYAlignment.Center,
+    true, 6, infoCard
+)
 
 -- ════════════════════════════════════════════════
 --  CALLBACKS
@@ -724,8 +856,11 @@ refreshBtn.MouseButton1Click:Connect(refreshList)
 flingSelBtn.MouseButton1Click:Connect(function()
     local targets = {}
     for p in pairs(selectedPlayers) do table.insert(targets, p) end
-    if #targets == 0 then setStatus("No player selected!", C.warning); return end
-    setStatus("Flinging "..#targets.." player(s)...", C.accent1)
+    if #targets == 0 then
+        setStatus("No player selected!", C.warning)
+        return
+    end
+    setStatus("Flinging " .. #targets .. " player(s)...", C.accent1)
     task.spawn(function()
         for _, p in ipairs(targets) do
             flingPlayer(p)
@@ -736,14 +871,17 @@ flingSelBtn.MouseButton1Click:Connect(function()
 end)
 
 flingAllBtn.MouseButton1Click:Connect(function()
-    if flingAllActive then setStatus("Fling All already running!", C.warning); return end
+    if flingAllActive then
+        setStatus("Fling All already running!", C.warning)
+        return
+    end
     setStatus("Fling All — ACTIVE", C.danger)
-    -- Pulse dot
+    -- Pulse the status dot
     task.spawn(function()
         while flingAllActive do
-            TweenService:Create(statDot, TweenInfo.new(0.4), { BackgroundTransparency=0.75 }):Play()
+            TweenService:Create(statDot, TweenInfo.new(0.4), { BackgroundTransparency = 0.75 }):Play()
             task.wait(0.4)
-            TweenService:Create(statDot, TweenInfo.new(0.4), { BackgroundTransparency=0   }):Play()
+            TweenService:Create(statDot, TweenInfo.new(0.4), { BackgroundTransparency = 0   }):Play()
             task.wait(0.4)
         end
     end)
@@ -759,22 +897,22 @@ end)
 -- ════════════════════════════════════════════════
 --  OPEN ANIMATION
 -- ════════════════════════════════════════════════
-Main.Size                 = UDim2.new(0, W, 0, 0)
+Main.Size                  = UDim2.new(0, W, 0, 0)
 Main.BackgroundTransparency = 1
-TweenService:Create(Main, TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-    Size                  = UDim2.new(0, W, 0, H),
-    BackgroundTransparency = 0,
-}):Play()
+TweenService:Create(Main,
+    TweenInfo.new(0.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+    { Size = UDim2.new(0,W,0,H), BackgroundTransparency = 0 }
+):Play()
 
 -- ════════════════════════════════════════════════
---  RAINBOW BORDER ANIMATION
+--  RAINBOW BORDER LOOP
 -- ════════════════════════════════════════════════
 task.spawn(function()
     local hue = 0
     while ScreenGui and ScreenGui.Parent do
         hue = (hue + 0.0018) % 1
-        local c1 = Color3.fromHSV(hue,           0.72, 1)
-        local c2 = Color3.fromHSV((hue+0.28)%1,  0.72, 1)
+        local c1 = Color3.fromHSV(hue,            0.72, 1)
+        local c2 = Color3.fromHSV((hue + 0.28)%1, 0.72, 1)
         local g  = mainStroke:FindFirstChildOfClass("UIGradient")
         if g then
             g.Color = ColorSequence.new({
@@ -786,4 +924,4 @@ task.spawn(function()
     end
 end)
 
-print("[FlingScript v3.0] ✅ Loaded — GUI ready!")
+print("[FlingScript v3.1] Loaded successfully ✅")
